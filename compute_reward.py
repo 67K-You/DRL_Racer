@@ -27,7 +27,7 @@ class RewardFunction:
         self.failure_counter = 0
         self.datalen = len(self.data)
 
-    def compute_reward(self, speed, pos):
+    def compute_reward(self, pos):
         terminated = False
         self.step_counter += 1
         min_dist = np.inf
@@ -45,7 +45,7 @@ class RewardFunction:
             # stop condition
             if index >= self.datalen or temp <= 0:
                 break
-        reward = speed*(best_index - self.cur_idx) / 100.0
+        reward = (best_index - self.cur_idx) / 100.0
         if best_index == self.cur_idx:  # if the best index didn't change, we rewind (more Markovian reward)
             min_dist = np.inf
             index = self.cur_idx
