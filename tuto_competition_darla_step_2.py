@@ -484,13 +484,21 @@ class BetaVAE(nn.Module):
 class MyCriticModule(torch.nn.Module):
     def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU, latent_dim=16,vision_module = None):
         super().__init__()
-        obs_dim = sum(prod(s for s in space.shape) for space in observation_space)
+        for space in observation_space:
+            if observation_space == Box(0.0, 255.0, (4, 64, 64)):
+                mlp_input += latent_dim
+            else:
+                mlp_input += prod(s for s in space.shape)
         act_dim = action_space.shape[0]
-        self.q = mlp([obs_dim + act_dim] + list(hidden_sizes) + [1], activation)
+        self.q_full = mlp([mlp_input + act_dim] + list(hidden_sizes) + [1], activation)
+        self.q_rec = torch.nn.LSTM(hidden_sizes[-1])
+        self.linear = nn.Linear(hidden_sizes[-1], 1)
 
     def forward(self, obs, act):
         x = torch.cat((*obs, act), -1)
-        q = self.q(x)
+        x = self.q(x)
+        x = self.q_rec(x)
+        q = self.linear(x)
         return torch.squeeze(q, -1)
 
 
@@ -518,7 +526,6 @@ class MyActorModule(ActorModule):
                 mlp_input += latent_dim
             else:
                 mlp_input += prod(s for s in space.shape)
-        dim_obs = sum(prod(s for s in space.shape) for space in observation_space)
         dim_act = action_space.shape[0]
         act_limit = action_space.high[0]
         self.vision_module = deepcopy(vision_module)
