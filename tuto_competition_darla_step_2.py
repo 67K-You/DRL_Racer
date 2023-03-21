@@ -35,7 +35,15 @@ from gym.spaces.box import Box
 
 # External libraries:
 import numpy as np
+import torch
 
+
+import torch.nn as nn
+from torch.autograd import Variable
+from tmrl.util import *
+from torch.nn import functional as F
+import itertools
+import math
 
 cuda = torch.cuda.is_available()
 # =====================================================================
@@ -179,12 +187,6 @@ def mlp(sizes, activation, output_activation=nn.Identity):
         layers += [nn.Linear(sizes[j], sizes[j + 1]), act()]
     return nn.Sequential(*layers)
 
-import torch.nn as nn
-from torch.autograd import Variable
-from tmrl.util import *
-from torch.nn import functional as F
-import itertools
-import math
 
 
 class BetaVAE(nn.Module):
@@ -249,11 +251,12 @@ class MyCriticModule(torch.nn.Module):
         for param in vision_module.parameters():
             param.requires_grad = False
         self.q_full = mlp([mlp_input + act_dim] + list(hidden_sizes), activation)
-        self.q_rec = torch.nn.LSTM(hidden_sizes[-1])
+        self.q_rec = torch.nn.LSTM(hidden_sizes[-1],hidden_sizes[-1])
         self.linear = nn.Linear(hidden_sizes[-1], 1)
 
     def forward(self, obs, act):
-        x = torch.cat((*obs, act), -1)
+        speed, gear, rpm, images, act1, act = obs
+        x = torch.cat((speed, gear, rpm, self.vision_module.encoder(images[3:][:][:]), act), -1)
         x = self.q(x)
         x = self.q_rec(x)
         q = self.linear(x)
@@ -296,13 +299,8 @@ class MyActorModule(ActorModule):
         self.act_limit = act_limit
 
     def forward(self, obs, test=False, with_logprob=True):
-        custom_obs = torch.empty()
-        for space in range(self.observation_space):
-            if space == Box(0.0, 255.0, (4, 64, 64)):
-                # convert images to latent space representation
-                custom_obs = torch.cat((custom_obs, self.vision_module.encoder(space[3:][:][:])), -1)
-            else:
-                custom_obs = torch.cat((custom_obs,obs), -1)
+        speed, gear, rpm, images, act1, act = obs
+        custom_obs = torch.cat((speed, gear, rpm, self.vision_module.encoder(images[:,3:,:,:])), -1)
         net_out = self.net(torch.cat(custom_obs, -1))
         rnn_out = self.rnn_module(net_out)
         mu = self.mu_layer(rnn_out)
@@ -500,3 +498,4 @@ training_cls = partial(TrainingOffline,
 
 if __name__ == "__main__":
     my_trainer = Trainer(training_cls=training_cls)
+    my_trainer.run()
