@@ -179,258 +179,12 @@ def mlp(sizes, activation, output_activation=nn.Identity):
         layers += [nn.Linear(sizes[j], sizes[j + 1]), act()]
     return nn.Sequential(*layers)
 
-
-# This utility computes the dimensionality of CNN feature maps when flattened together:
-def num_flat_features(x):
-    size = x.size()[1:]  # dimension 0 is the batch dimension, so it is ignored
-    num_features = 1
-    for s in size:
-        num_features *= s
-    return num_features
-
-
-# This utility computes the dimensionality of the output in a 2D CNN layer:
-def conv2d_out_dims(conv_layer, h_in, w_in):
-    h_out = floor((h_in + 2 * conv_layer.padding[0] - conv_layer.dilation[0] * (conv_layer.kernel_size[0] - 1) - 1) / conv_layer.stride[0] + 1)
-    w_out = floor((w_in + 2 * conv_layer.padding[1] - conv_layer.dilation[1] * (conv_layer.kernel_size[1] - 1) - 1) / conv_layer.stride[1] + 1)
-    return h_out, w_out
-
-
-# Let us now define the main building block of both our actor and critic:
-class VanillaCNN(nn.Module):
-    def __init__(self, q_net):
-        super(VanillaCNN, self).__init__()
-
-        # We will implement SAC, which uses a critic; this flag indicates whether the object is a critic network:
-        self.q_net = q_net
-
-        # Convolutional layers processing screenshots:
-        self.h_out, self.w_out = 64, 64
-        self.conv1 = nn.Conv2d(4, 64, 8, stride=2)
-        self.h_out, self.w_out = conv2d_out_dims(self.conv1, self.h_out, self.w_out)
-        self.conv2 = nn.Conv2d(64, 64, 4, stride=2)
-        self.h_out, self.w_out = conv2d_out_dims(self.conv2, self.h_out, self.w_out)
-        self.conv3 = nn.Conv2d(64, 128, 4, stride=2)
-        self.h_out, self.w_out = conv2d_out_dims(self.conv3, self.h_out, self.w_out)
-        self.conv4 = nn.Conv2d(128, 128, 4, stride=2)
-        self.h_out, self.w_out = conv2d_out_dims(self.conv4, self.h_out, self.w_out)
-        self.out_channels = self.conv4.out_channels
-
-        # Dimensionality of the CNN output:
-        self.flat_features = self.out_channels * self.h_out * self.w_out
-
-        # Dimensionality of the MLP input:
-
-        # (Note that when the module is the critic, the MLP is also fed the action, which is 3 floats in TrackMania)
-        self.mlp_input_features = self.flat_features + 12 if self.q_net else self.flat_features + 9
-
-        # MLP layers:
-        # (when using the model as a policy, we need to sample from a multivariate gaussian defined later in the code;
-        # thus, the output dimensionality is  1 for the critic, and we will define the output layer of policies later)
-        self.mlp_layers = [256, 256, 1] if self.q_net else [256, 256]
-        self.mlp = mlp([self.mlp_input_features] + self.mlp_layers, nn.ReLU)
-
-    def forward(self, x):
-        if self.q_net:
-            # The critic takes the current action act as additional input
-            # act1 and act2 are the actions in the action buffer (see real-time RL):
-            speed, gear, rpm, images, act1, act2, act = x
-        else:
-            # For the policy, we still need the action buffer in observations:
-            speed, gear, rpm, images, act1, act2 = x
-
-        # CNN forward pass:
-        x = F.relu(self.conv1(images))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
-        flat_features = num_flat_features(x)
-        assert flat_features == self.flat_features, f"x.shape:{x.shape}, flat_features:{flat_features}, self.out_channels:{self.out_channels}, self.h_out:{self.h_out}, self.w_out:{self.w_out}"
-        x = x.view(-1, flat_features)
-
-        # MLP forward pass:
-        if self.q_net:
-            x = torch.cat((speed, gear, rpm, x, act1, act2, act), -1)
-        else:
-            x = torch.cat((speed, gear, rpm, x, act1, act2), -1)
-        x = self.mlp(x)
-        return x
-
-
-# Let us now implement our actor, wrapped in the TMRL ActorModule interface.
-# A trained such ActorModule is all you need to submit to the competition.
-class SquashedGaussianVanillaCNNActor(ActorModule):
-    """
-    ActorModule class wrapping our policy.
-    """
-    def __init__(self, observation_space, action_space):
-        """
-        If you want to reimplement __init__, use the observation_space, action_space arguments.
-        You don't have to use them, they are only here for convenience in case you want them.
-
-        Args:
-            observation_space: observation space of the Gym environment
-            action_space: action space of the Gym environment
-        """
-        # And don't forget to call the superclass __init__:
-        super().__init__(observation_space, action_space)
-        dim_act = action_space.shape[0]  # dimensionality of actions
-        act_limit = action_space.high[0]  # maximum amplitude of actions
-        # Our CNN+MLP module:
-        self.net = VanillaCNN(q_net=False)
-        # The policy output layer, which samples actions stochastically in a gaussian, with means...:
-        self.mu_layer = nn.Linear(256, dim_act)
-        # ... and log standard deviations:
-        self.log_std_layer = nn.Linear(256, dim_act)
-        # We will squash this within the action space thanks to a tanh activation:
-        self.act_limit = act_limit
-
-    def forward(self, obs, test=False):
-        """
-        Forward pass in our policy.
-
-        Args:
-            obs: the observation from the Gym environment
-            test: this will be True for test episodes and False for training episodes
-
-        Returns:
-            pi_action: the action sampled in the policy
-            logp_pi: the log probability of the action for SAC
-        """
-        # MLP:
-        net_out = self.net(obs)
-        # means of the multivariate gaussian (action vector)
-        mu = self.mu_layer(net_out)
-        # standard deviations:
-        log_std = self.log_std_layer(net_out)
-        log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
-        std = torch.exp(log_std)
-        # action sampling
-        pi_distribution = torch.distributions.Normal(mu, std)
-        if test:
-            pi_action = mu
-        else:
-            pi_action = pi_distribution.rsample()
-        # log probabilities:
-        logp_pi = pi_distribution.log_prob(pi_action).sum(axis=-1)
-        logp_pi -= (2 * (np.log(2) - pi_action - F.softplus(-2 * pi_action))).sum(axis=1)
-        # squashing within the action space:
-        pi_action = torch.tanh(pi_action)
-        pi_action = self.act_limit * pi_action
-        pi_action = pi_action.squeeze()
-        return pi_action, logp_pi
-
-    def act(self, obs, test=False):
-        """
-        Computes an action from an observation.
-
-        Args:
-            obs (object): the observation
-            test (bool): True at test time, False otherwise
-
-        Returns:
-            act (numpy.array): the computed action
-        """
-        with torch.no_grad():
-            a, _ = self.forward(obs, test, False)
-            return a.numpy()
-
-
-# The critic module is straightforward:
-class VanillaCNNQFunction(nn.Module):
-    """
-    Critic module.
-    """
-    def __init__(self, observation_space, action_space):
-        super().__init__()
-        self.net = VanillaCNN(q_net=True)
-
-    def forward(self, obs, act):
-        x = (*obs, act)
-        q = self.net(x)
-        return torch.squeeze(q, -1)
-
-
-# Finally, let us merge this together into an actor-critic module for training.
-# Classically, we use two parallel critics to alleviate the overestimation bias.
-class VanillaCNNActorCritic(nn.Module):
-    """
-    Actor-critic module for the SAC algorithm.
-    """
-    def __init__(self, observation_space, action_space):
-        super().__init__()
-
-        # build policy and value functions
-        self.actor = SquashedGaussianVanillaCNNActor(observation_space, action_space)
-        self.q1 = VanillaCNNQFunction(observation_space, action_space)
-        self.q2 = VanillaCNNQFunction(observation_space, action_space)
-
-    def act(self, obs, test=False):
-        with torch.no_grad():
-            a, _ = self.actor(obs, test, False)
-            return a.numpy()
-
 import torch.nn as nn
 from torch.autograd import Variable
 from tmrl.util import *
 from torch.nn import functional as F
 import itertools
 import math
-
-class DAE(nn.Module):
-    def __init__(self,image_shape,latent_dim):
-        super(DAE,self).__init__()
-
-        self.image_shape = image_shape # a 28x28 image corresponds to 4 on the FC layer, a 64x64 image corresponds to 13
-                            # can calculate this using output_after_conv() in utils.py
-        self.latent_dim = latent_dim
-        self.noise_scale = 0
-
-        self.encoder = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=4, stride=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=4, stride=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=4, stride=2),
-            nn.ReLU())
-        self.x_size = int(math.ceil((((((image_shape[0] - 10) / 2 ) + 1 ) - 4 ) / 2 ) + 1))
-        self.y_size = int(math.ceil((((((image_shape[1] - 10) / 2 ) + 1 ) - 4 ) / 2 ) + 1))
-        self.fc1 = nn.Linear(32 * self.x_size * self.y_size, self.latent_dim)
-        self.fc2 = nn.Linear(self.latent_dim, 32 * self.x_size * self.y_size)
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(32, 32, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 32, kernel_size=4, stride=2),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 32, kernel_size=4, stride=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 1, kernel_size=4, stride=1),
-	    nn.Sigmoid())
-
-    def forward(self, x):
-        n = x.size()[0]
-        if cuda:
-            noise =  Variable(self.noise_scale*torch.randn(n, 1, self.image_shape[0], self.image_shape[1])).to(device)
-            x = torch.add(x, noise).to(device)
-        else:
-            noise = Variable(self.noise_scale * torch.randn(n, 1, self.image_shape[1], self.image_shape[1]))
-            x = torch.add(x, noise)
-        z = self.encoder(x)
-        z = z.view(-1, 32*self.x_size*self.y_size)
-        z = self.fc1(z)
-        x_hat = self.fc2(z)
-        x_hat = x_hat.view(-1, 32, self.x_size, self.y_size)
-        x_hat = self.decoder(x_hat)
-
-        return z, x_hat
-
-    def encode(self, x):
-        #x = x.unsqueeze(0)
-        z, _ = self.forward(x)
-
-        return z
 
 
 class BetaVAE(nn.Module):
@@ -484,13 +238,17 @@ class BetaVAE(nn.Module):
 class MyCriticModule(torch.nn.Module):
     def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU, latent_dim=16,vision_module = None):
         super().__init__()
+        mlp_input = 0
         for space in observation_space:
             if observation_space == Box(0.0, 255.0, (4, 64, 64)):
                 mlp_input += latent_dim
             else:
                 mlp_input += prod(s for s in space.shape)
         act_dim = action_space.shape[0]
-        self.q_full = mlp([mlp_input + act_dim] + list(hidden_sizes) + [1], activation)
+        self.vision_module = deepcopy(vision_module)
+        for param in vision_module.parameters():
+            param.requires_grad = False
+        self.q_full = mlp([mlp_input + act_dim] + list(hidden_sizes), activation)
         self.q_rec = torch.nn.LSTM(hidden_sizes[-1])
         self.linear = nn.Linear(hidden_sizes[-1], 1)
 
@@ -545,7 +303,7 @@ class MyActorModule(ActorModule):
                 custom_obs = torch.cat((custom_obs, self.vision_module.encoder(space[3:][:][:])), -1)
             else:
                 custom_obs = torch.cat((custom_obs,obs), -1)
-        net_out = self.net(torch.cat(obs, -1))
+        net_out = self.net(torch.cat(custom_obs, -1))
         rnn_out = self.rnn_module(net_out)
         mu = self.mu_layer(rnn_out)
         log_std = self.log_std_layer(rnn_out)
@@ -643,11 +401,8 @@ class SACTrainingAgent(TrainingAgent):
         else:
             self.alpha_t = torch.tensor(float(self.alpha)).to(self.device)
         self.bvae = BetaVAE(image_shape,latent_dim).to(device)
-        self.dae = DAE(image_shape,latent_dim).to(device)
         bvae_state_dict = torch.load('bvae-test-model.pkl')
         self.bvae.load_state_dict(bvae_state_dict)
-        dae_state_dict = torch.load('dae-test-model.pkl')
-        self.dae.load_state_dict(dae_state_dict)
 
     def get_actor(self):
         return self.model_nograd.actor
@@ -718,8 +473,19 @@ training_agent_cls = partial(SACTrainingAgent,
 
 # Trainer instance:
 
-training_cls = partial(
-    TrainingOffline,
+training_agent_cls = partial(SACTrainingAgent,
+                             model_cls=MyActorCriticModule,
+                             gamma=0.99,
+                             polyak=0.995,
+                             alpha=0.2,
+                             lr_actor=1e-3,
+                             lr_critic=1e-3,
+                             lr_entropy=1e-3,
+                             learn_entropy_coef=True,
+                             target_entropy=None)
+
+
+training_cls = partial(TrainingOffline,
     env_cls=env_cls,
     memory_cls=memory_cls,
     training_agent_cls=training_agent_cls,
@@ -731,35 +497,6 @@ training_cls = partial(
     max_training_steps_per_env_step=max_training_steps_per_env_step,
     start_training=start_training,
     device=device)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-training_agent_cls = None
-
-training_cls = partial(TrainingOffline,
-                       training_agent_cls=training_agent_cls,
-                       epochs=epochs,
-                       rounds=rounds,
-                       steps=steps,
-                       update_buffer_interval=update_buffer_interval,
-                       update_model_interval=update_model_interval,
-                       max_training_steps_per_env_step=max_training_steps_per_env_step,
-                       start_training=start_training,
-                       device=device,
-                       env_cls=env_cls,
-                       memory_cls=memory_cls)
 
 if __name__ == "__main__":
     my_trainer = Trainer(training_cls=training_cls)
