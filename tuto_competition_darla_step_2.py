@@ -411,6 +411,8 @@ class SACTrainingAgent(TrainingAgent):
         self.bvae = BetaVAE(image_shape,latent_dim).to(device)
         bvae_state_dict = torch.load('bvae-test-model.pkl')
         self.bvae.load_state_dict(bvae_state_dict)
+        self.episode = 0
+        self.iter = 0
 
     def get_actor(self):
         return self.model_nograd.actor
@@ -457,6 +459,15 @@ class SACTrainingAgent(TrainingAgent):
             for p, p_targ in zip(self.model.parameters(), self.model_target.parameters()):
                 p_targ.data.mul_(self.polyak)
                 p_targ.data.add_((1 - self.polyak) * p.data)
+        if self.iter % 20 == 0:
+            with open("logs.txt", "a") as f:
+                f.write(f"{loss_q} {loss_pi}\n")
+            print(f"[Episode {self.episode}/ Iter {self.iter}] Loss Q value: {loss_q} Loss action Pi: {loss_pi}")
+        if d:
+            self.episode += 1
+            self.iter = 0
+        else:
+            self.iter += 1
         ret_dict = dict(
             loss_actor=loss_pi.detach(),
             loss_critic=loss_q.detach(),
