@@ -82,7 +82,7 @@ update_buffer_interval = cfg.TMRL_CONFIG["UPDATE_BUFFER_INTERVAL"]
 # training device (e.g., "cuda:0"):
 # if None, the device will be selected automatically
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(device)
+print(f"Training device : {device}")
 # maximum size of the replay buffer:
 memory_size = cfg.TMRL_CONFIG["MEMORY_SIZE"]
 
@@ -185,7 +185,6 @@ def mlp(sizes, activation, output_activation=nn.Identity):
     for j in range(len(sizes) - 1):
         act = activation if j < len(sizes) - 2 else output_activation
         layers += [nn.Linear(sizes[j], sizes[j + 1]), act()]
-    print(nn.Sequential(*layers))
     return nn.Sequential(*layers)
 
 
@@ -251,25 +250,25 @@ class MyCriticModule(torch.nn.Module):
     def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU, latent_dim=16,vision_module = None):
         super().__init__()
         mlp_input = 0
-        for space in observation_space:
-            if observation_space == Box(0.0, 255.0, (4, 64, 64)):
-                mlp_input += latent_dim
-            else:
-                mlp_input += prod(s for s in space.shape)
+        speed, gear, rpm, images, act1, act = observation_space
+        mlp_input += prod(s for s in speed.shape)
+        mlp_input += prod(s for s in gear.shape)
+        mlp_input += prod(s for s in rpm.shape)
+        mlp_input += latent_dim
         act_dim = action_space.shape[0]
         self.vision_module = deepcopy(vision_module).to(device)
         for param in vision_module.parameters():
             param.requires_grad = False
-        self.q_full = mlp([mlp_input + act_dim] + list(hidden_sizes), activation)
+        self.q_full = mlp([mlp_input + act_dim, hidden_sizes[0]], activation)
         self.q_rec = torch.nn.LSTM(hidden_sizes[-1],hidden_sizes[-1])
         self.linear = nn.Linear(hidden_sizes[-1], 1)
 
     def forward(self, obs, act):
         speed, gear, rpm, images, act1, act = obs
         x = torch.cat((speed, gear, rpm, self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(device)), act), -1)
-        x = self.q(x)
-        x = self.q_rec(x)
-        q = self.linear(x)
+        mlp_out = self.q_full(x)
+        rnn_out, (hn, cn) = self.q_rec(mlp_out)
+        q = self.linear(rnn_out)
         return torch.squeeze(q, -1)
 
 
@@ -292,11 +291,11 @@ class MyActorModule(ActorModule):
         super().__init__(observation_space, action_space)
         mlp_input = 0
         self.observation_space = observation_space
-        for space in observation_space:
-            if observation_space == Box(0.0, 255.0, (4, 64, 64)):
-                mlp_input += latent_dim
-            else:
-                mlp_input += prod(s for s in space.shape)
+        speed, gear, rpm, images, act1, act = observation_space
+        mlp_input += prod(s for s in speed.shape)
+        mlp_input += prod(s for s in gear.shape)
+        mlp_input += prod(s for s in rpm.shape)
+        mlp_input += latent_dim
         dim_act = action_space.shape[0]
         act_limit = action_space.high[0]
         self.vision_module = deepcopy(vision_module)
@@ -313,9 +312,7 @@ class MyActorModule(ActorModule):
         speed, gear, rpm, images, act1, act = obs
         custom_obs = torch.cat((speed, gear, rpm, self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(device))), -1)
         net_out = self.net(custom_obs)
-        print(net_out.shape)
-        rnn_out = self.rnn_module(net_out)
-        print(rnn_out.shape)
+        rnn_out, (hn, cn) = self.rnn_module(net_out)
         mu = self.mu_layer(rnn_out)
         log_std = self.log_std_layer(rnn_out)
         log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
