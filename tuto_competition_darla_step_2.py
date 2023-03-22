@@ -81,8 +81,8 @@ update_buffer_interval = cfg.TMRL_CONFIG["UPDATE_BUFFER_INTERVAL"]
 
 # training device (e.g., "cuda:0"):
 # if None, the device will be selected automatically
-device = None
-
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+print(device)
 # maximum size of the replay buffer:
 memory_size = cfg.TMRL_CONFIG["MEMORY_SIZE"]
 
@@ -185,6 +185,7 @@ def mlp(sizes, activation, output_activation=nn.Identity):
     for j in range(len(sizes) - 1):
         act = activation if j < len(sizes) - 2 else output_activation
         layers += [nn.Linear(sizes[j], sizes[j + 1]), act()]
+    print(nn.Sequential(*layers))
     return nn.Sequential(*layers)
 
 
@@ -233,6 +234,15 @@ class BetaVAE(nn.Module):
         x_hat = self.decoder(x_hat)
 
         return mu_z, log_sigma_z, x_hat
+    
+    def infer_latent_representation(self, x):
+        n = x.size()[0]
+        z = self.encoder(x)
+        z = z.view(-1, 32*self.x_size*self.y_size)
+        mu_z = self.fc_mu(z)
+        log_sigma_z = self.fc_sigma(z)
+        sample_z = mu_z + log_sigma_z.exp()*Variable(torch.randn(n, self.latent_dim)).to(device)
+        return sample_z
 
 # Training agent:
 
@@ -247,7 +257,7 @@ class MyCriticModule(torch.nn.Module):
             else:
                 mlp_input += prod(s for s in space.shape)
         act_dim = action_space.shape[0]
-        self.vision_module = deepcopy(vision_module)
+        self.vision_module = deepcopy(vision_module).to(device)
         for param in vision_module.parameters():
             param.requires_grad = False
         self.q_full = mlp([mlp_input + act_dim] + list(hidden_sizes), activation)
@@ -256,7 +266,7 @@ class MyCriticModule(torch.nn.Module):
 
     def forward(self, obs, act):
         speed, gear, rpm, images, act1, act = obs
-        x = torch.cat((speed, gear, rpm, self.vision_module.encoder(images[3:][:][:]), act), -1)
+        x = torch.cat((speed, gear, rpm, self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(device)), act), -1)
         x = self.q(x)
         x = self.q_rec(x)
         q = self.linear(x)
@@ -290,9 +300,10 @@ class MyActorModule(ActorModule):
         dim_act = action_space.shape[0]
         act_limit = action_space.high[0]
         self.vision_module = deepcopy(vision_module)
+        self.vision_module = self.vision_module.to(device)
         for param in vision_module.parameters():
             param.requires_grad = False
-        self.net = mlp([mlp_input] + list(hidden_sizes), activation, activation)
+        self.net = mlp([mlp_input,hidden_sizes[0]], activation, activation)
         self.rnn_module = nn.LSTM(hidden_sizes[-1],hidden_sizes[-1])
         self.mu_layer = torch.nn.Linear(hidden_sizes[-1], dim_act)
         self.log_std_layer = torch.nn.Linear(hidden_sizes[-1], dim_act)
@@ -300,9 +311,11 @@ class MyActorModule(ActorModule):
 
     def forward(self, obs, test=False, with_logprob=True):
         speed, gear, rpm, images, act1, act = obs
-        custom_obs = torch.cat((speed, gear, rpm, self.vision_module.encoder(images[:,3:,:,:])), -1)
-        net_out = self.net(torch.cat(custom_obs, -1))
+        custom_obs = torch.cat((speed, gear, rpm, self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(device))), -1)
+        net_out = self.net(custom_obs)
+        print(net_out.shape)
         rnn_out = self.rnn_module(net_out)
+        print(rnn_out.shape)
         mu = self.mu_layer(rnn_out)
         log_std = self.log_std_layer(rnn_out)
         log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
