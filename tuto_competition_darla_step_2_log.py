@@ -45,7 +45,6 @@ from torch.nn import functional as F
 import itertools
 import math
 
-cuda = torch.cuda.is_available()
 # =====================================================================
 # USEFUL PARAMETERS
 # =====================================================================
@@ -79,10 +78,6 @@ update_model_interval = cfg.TMRL_CONFIG["UPDATE_MODEL_INTERVAL"]
 # number of training steps between when the Trainer updates its replay buffer with the buffer of received samples:
 update_buffer_interval = cfg.TMRL_CONFIG["UPDATE_BUFFER_INTERVAL"]
 
-# training device (e.g., "cuda:0"):
-# if None, the device will be selected automatically
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(f"Training device : {device}")
 # maximum size of the replay buffer:
 memory_size = cfg.TMRL_CONFIG["MEMORY_SIZE"]
 
@@ -190,12 +185,13 @@ def mlp(sizes, activation, output_activation=nn.Identity):
 
 
 class BetaVAE(nn.Module):
-    def __init__(self, image_shape,latent_dim):
+    def __init__(self, image_shape,latent_dim, device='cpu'):
         super(BetaVAE,self).__init__()
 
         self.image_shape = image_shape # a 28x28 image corresponds to 4 on the FC layer, a 64x64 image corresponds to 13
                             # can calculate this using output_after_conv() in utils.py
         self.latent_dim = latent_dim
+        self.device = device
 
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=4, stride=1),
@@ -227,7 +223,7 @@ class BetaVAE(nn.Module):
         z = z.view(-1, 32*self.x_size*self.y_size)
         mu_z = self.fc_mu(z)
         log_sigma_z = self.fc_sigma(z)
-        sample_z = mu_z + log_sigma_z.exp()*Variable(torch.randn(n, self.latent_dim)).to(device)
+        sample_z = mu_z + log_sigma_z.exp()*Variable(torch.randn(n, self.latent_dim)).to(self.device)
         x_hat = self.fc_up(sample_z)
         x_hat = x_hat.view(-1, 32, self.x_size, self.y_size)
         x_hat = self.decoder(x_hat)
@@ -240,83 +236,118 @@ class BetaVAE(nn.Module):
         z = z.view(-1, 32*self.x_size*self.y_size)
         mu_z = self.fc_mu(z)
         log_sigma_z = self.fc_sigma(z)
-        sample_z = mu_z + log_sigma_z.exp()*Variable(torch.randn(n, self.latent_dim)).to(device)
+        sample_z = mu_z + log_sigma_z.exp()*Variable(torch.randn(n, self.latent_dim)).to(self.device)
         return sample_z
 
 # Training agent:
 
 
 class MyCriticModule(torch.nn.Module):
-    def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU, latent_dim=16,vision_module = None):
+    def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU, latent_dim=16,vision_module = None, device = 'cpu'):
         super().__init__()
+        self.device = device
         mlp_input = 0
         speed, gear, rpm, images, act1, act = observation_space
         mlp_input += prod(s for s in speed.shape)
         mlp_input += prod(s for s in gear.shape)
         mlp_input += prod(s for s in rpm.shape)
-        mlp_input += latent_dim
+        mlp_input += 4 * latent_dim
         act_dim = action_space.shape[0]
         self.vision_module = deepcopy(vision_module).to(device)
         for param in vision_module.parameters():
             param.requires_grad = False
-        self.q_full = mlp([mlp_input + act_dim, hidden_sizes[0]], activation)
-        self.q_rec = torch.nn.LSTM(hidden_sizes[-1],hidden_sizes[-1])
+        self.q_full = mlp([mlp_input + 3 * act_dim, hidden_sizes[0], hidden_sizes[1]], activation)
+        # self.q_rec = torch.nn.LSTM(hidden_sizes[-1],hidden_sizes[-1])
         self.linear = nn.Linear(hidden_sizes[-1], 1)
+        self.hn = None
+        self.cn = None
 
     def forward(self, obs, act):
-        speed, gear, rpm, images, act1, act = obs
-        x = torch.cat((speed, gear, rpm, self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(device)), act), -1)
+        speed, gear, rpm, images, act1, act2 = obs
+        x = torch.cat((speed,
+                        gear,
+                        rpm,
+                        self.vision_module.infer_latent_representation(Variable(images[:,0:1,:,:]).to(self.device)),
+                        self.vision_module.infer_latent_representation(Variable(images[:,1:2,:,:]).to(self.device)),
+                        self.vision_module.infer_latent_representation(Variable(images[:,2:3:,:,:]).to(self.device)),
+                        self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(self.device)),
+                        act1,
+                        act2,
+                        act), -1)
         mlp_out = self.q_full(x)
-        self.q_rec.flatten_parameters()
-        rnn_out, _ = self.q_rec(mlp_out)
-        q = self.linear(rnn_out)
+        #self.q_rec.flatten_parameters()
+        #if self.hn is None or self.cn is None:
+        #    rnn_out, (self.hn, self.cn) = self.q_rec(mlp_out)
+        #else:
+        #    rnn_out, (self.hn, self.cn) = self.q_rec(mlp_out, (self.hn, self.cn))
+        q = self.linear(mlp_out)
         return torch.squeeze(q, -1)
 
 
 class MyActorCriticModule(torch.nn.Module):
-    def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU,latent_dim=16,image_shape = [64,64]):
+    def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU,latent_dim=16,image_shape = [64,64], device = 'cpu'):
         super().__init__()
-        self.bvae = BetaVAE(image_shape,latent_dim).to(device)
+        self.bvae = BetaVAE(image_shape,latent_dim,device=device).to(device)
         bvae_state_dict = torch.load('bvae-test-model.pkl')
         self.bvae.load_state_dict(bvae_state_dict)
-        self.actor = MyActorModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae)  # our ActorModule :)
-        self.q1 = MyCriticModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae)  # Q network 1
-        self.q2 = MyCriticModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae)  # Q network 2
+        self.actor = MyActorModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae, device=device)  # our ActorModule :)
+        self.q1 = MyCriticModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae, device=device)  # Q network 1
+        self.q2 = MyCriticModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae, device=device)  # Q network 2
 
 
 class MyActorModule(ActorModule):
     """
     Directly adapted from the Spinup implementation of SAC
     """
-    def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU, latent_dim=16, vision_module = None):
+    def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU, latent_dim=16, vision_module = None, device='cpu'):
         super().__init__(observation_space, action_space)
         mlp_input = 0
+        self.device = device
         self.observation_space = observation_space
         speed, gear, rpm, images, act1, act = observation_space
         mlp_input += prod(s for s in speed.shape)
         mlp_input += prod(s for s in gear.shape)
         mlp_input += prod(s for s in rpm.shape)
-        mlp_input += latent_dim
+        mlp_input += 4 * latent_dim
         dim_act = action_space.shape[0]
+        mlp_input += 2*dim_act
         act_limit = action_space.high[0]
-        self.vision_module = deepcopy(vision_module)
+        if vision_module is None:
+            self.vision_module = BetaVAE([64,64],latent_dim,device=device).to(device)
+            bvae_state_dict = torch.load('bvae-test-model.pkl')
+            self.vision_module.load_state_dict(bvae_state_dict)
+        else:
+            self.vision_module = deepcopy(vision_module)
         self.vision_module = self.vision_module.to(device)
-        for param in vision_module.parameters():
+        for param in self.vision_module.parameters():
             param.requires_grad = False
-        self.net = mlp([mlp_input,hidden_sizes[0]], activation, activation)
-        self.rnn_module = nn.LSTM(hidden_sizes[-1],hidden_sizes[-1])
+        self.net = mlp([mlp_input,hidden_sizes[0], hidden_sizes[1]], activation, activation)
+        #self.rnn_module = nn.LSTM(hidden_sizes[-1],hidden_sizes[-1])
         self.mu_layer = torch.nn.Linear(hidden_sizes[-1], dim_act)
         self.log_std_layer = torch.nn.Linear(hidden_sizes[-1], dim_act)
         self.act_limit = act_limit
+        #self.hn = None
+        #self.cn = None
 
     def forward(self, obs, test=False, with_logprob=True):
-        speed, gear, rpm, images, act1, act = obs
-        custom_obs = torch.cat((speed, gear, rpm, self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(device))), -1)
+        speed, gear, rpm, images, act1, act2 = obs
+        custom_obs = torch.cat((speed,
+                        gear,
+                        rpm,
+                        self.vision_module.infer_latent_representation(Variable(images[:,0:1,:,:]).to(self.device)),
+                        self.vision_module.infer_latent_representation(Variable(images[:,1:2,:,:]).to(self.device)),
+                        self.vision_module.infer_latent_representation(Variable(images[:,2:3:,:,:]).to(self.device)),
+                        self.vision_module.infer_latent_representation(Variable(images[:,3:,:,:]).to(self.device)),
+                        act1,
+                        act2), -1)
         net_out = self.net(custom_obs)
-        self.rnn_module.flatten_parameters()
-        rnn_out, _ = self.rnn_module(net_out)
-        mu = self.mu_layer(rnn_out)
-        log_std = self.log_std_layer(rnn_out)
+        #self.rnn_module.flatten_parameters()
+        #if self.hn is None or self.cn is None:
+        #    rnn_out, (self.hn, self.cn) = self.rnn_module(net_out)
+        #else:
+        #    rnn_out, (self.hn, self.cn) = self.rnn_module(net_out, (self.hn, self.cn))
+        mu = self.mu_layer(net_out)
+        log_std = self.log_std_layer(net_out)
         log_std = torch.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
         std = torch.exp(log_std)
         pi_distribution = torch.distributions.normal.Normal(mu, std)
@@ -387,7 +418,7 @@ class SACTrainingAgent(TrainingAgent):
         super().__init__(observation_space=observation_space,
                          action_space=action_space,
                          device=device)
-        model = model_cls(observation_space, action_space)
+        model = model_cls(observation_space, action_space, device=device)
         self.model = model.to(device)
         self.model_target = no_grad(deepcopy(self.model))
         self.gamma = gamma
@@ -410,7 +441,7 @@ class SACTrainingAgent(TrainingAgent):
             self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=self.lr_entropy)
         else:
             self.alpha_t = torch.tensor(float(self.alpha)).to(self.device)
-        self.bvae = BetaVAE(image_shape,latent_dim).to(device)
+        self.bvae = BetaVAE(image_shape,latent_dim,device=device).to(device)
         bvae_state_dict = torch.load('bvae-test-model.pkl')
         self.bvae.load_state_dict(bvae_state_dict)
         self.iter = 0
@@ -475,45 +506,39 @@ class SACTrainingAgent(TrainingAgent):
         return ret_dict
 
 
-training_agent_cls = partial(SACTrainingAgent,
-                             model_cls=MyActorCriticModule,
-                             gamma=0.99,
-                             polyak=0.995,
-                             alpha=0.2,
-                             lr_actor=1e-3,
-                             lr_critic=1e-3,
-                             lr_entropy=1e-3,
-                             learn_entropy_coef=True,
-                             target_entropy=None)
-
-
-# Trainer instance:
-
-training_agent_cls = partial(SACTrainingAgent,
-                             model_cls=MyActorCriticModule,
-                             gamma=0.99,
-                             polyak=0.995,
-                             alpha=0.2,
-                             lr_actor=1e-3,
-                             lr_critic=1e-3,
-                             lr_entropy=1e-3,
-                             learn_entropy_coef=True,
-                             target_entropy=None)
-
-
-training_cls = partial(TrainingOffline,
-    env_cls=env_cls,
-    memory_cls=memory_cls,
-    training_agent_cls=training_agent_cls,
-    epochs=epochs,
-    rounds=rounds,
-    steps=steps,
-    update_buffer_interval=update_buffer_interval,
-    update_model_interval=update_model_interval,
-    max_training_steps_per_env_step=max_training_steps_per_env_step,
-    start_training=start_training,
-    device=device)
 
 if __name__ == "__main__":
+    cuda = torch.cuda.is_available()
+    # training device (e.g., "cuda:0"):
+    # if None, the device will be selected automatically
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"Training device : {device}")
+    # Trainer instance:
+
+    training_agent_cls = partial(SACTrainingAgent,
+                                model_cls=MyActorCriticModule,
+                                gamma=0.99,
+                                polyak=0.995,
+                                alpha=0.2,
+                                lr_actor=1e-3,
+                                lr_critic=1e-3,
+                                lr_entropy=1e-3,
+                                learn_entropy_coef=True,
+                                target_entropy=None,
+                                device = device)
+
+
+    training_cls = partial(TrainingOffline,
+        env_cls=env_cls,
+        memory_cls=memory_cls,
+        training_agent_cls=training_agent_cls,
+        epochs=epochs,
+        rounds=rounds,
+        steps=steps,
+        update_buffer_interval=update_buffer_interval,
+        update_model_interval=update_model_interval,
+        max_training_steps_per_env_step=max_training_steps_per_env_step,
+        start_training=start_training,
+        device=device)
     my_trainer = Trainer(training_cls=training_cls)
     my_trainer.run()
