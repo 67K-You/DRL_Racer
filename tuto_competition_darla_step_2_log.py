@@ -463,7 +463,7 @@ class SACTrainingAgent(TrainingAgent):
         if self.iter % 20 == 0:
             with open("logs.txt", "a") as f:
                 f.write(f"{loss_q} {loss_pi}\n")
-            print(f"Iter {self.iter}] Loss Q value: {loss_q} Loss action Pi: {loss_pi}")
+            print(f"[Iter {self.iter}] Loss Q value: {loss_q} Loss action Pi: {loss_pi}")
         self.iter += 1
         ret_dict = dict(
             loss_actor=loss_pi.detach(),

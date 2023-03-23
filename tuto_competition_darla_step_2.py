@@ -276,7 +276,7 @@ class MyActorCriticModule(torch.nn.Module):
     def __init__(self, observation_space, action_space, hidden_sizes=(256, 256), activation=torch.nn.ReLU,latent_dim=16,image_shape = [64,64]):
         super().__init__()
         self.bvae = BetaVAE(image_shape,latent_dim).to(device)
-        bvae_state_dict = torch.load('bvae-test-model.pkl')
+        bvae_state_dict = torch.load(os.path.join("autoencoder_state_dicts", 'bvae-test-model.pkl'), map_location=torch.device('cpu'))
         self.bvae.load_state_dict(bvae_state_dict)
         self.actor = MyActorModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae)  # our ActorModule :)
         self.q1 = MyCriticModule(observation_space, action_space, hidden_sizes, activation, latent_dim=16, vision_module = self.bvae)  # Q network 1
@@ -409,9 +409,8 @@ class SACTrainingAgent(TrainingAgent):
         else:
             self.alpha_t = torch.tensor(float(self.alpha)).to(self.device)
         self.bvae = BetaVAE(image_shape,latent_dim).to(device)
-        bvae_state_dict = torch.load('bvae-test-model.pkl')
+        bvae_state_dict = torch.load(os.path.join("autoencoder_state_dicts", 'bvae-test-model.pkl'), map_location=torch.device('cpu'))
         self.bvae.load_state_dict(bvae_state_dict)
-        self.episode = 0
         self.iter = 0
 
     def get_actor(self):
@@ -462,12 +461,8 @@ class SACTrainingAgent(TrainingAgent):
         if self.iter % 20 == 0:
             with open("logs.txt", "a") as f:
                 f.write(f"{loss_q} {loss_pi}\n")
-            print(f"[Episode {self.episode}/ Iter {self.iter}] Loss Q value: {loss_q} Loss action Pi: {loss_pi}")
-        if d:
-            self.episode += 1
-            self.iter = 0
-        else:
-            self.iter += 1
+            print(f"[Iter {self.iter}] Loss Q value: {loss_q} Loss action Pi: {loss_pi}")
+        self.iter += 1
         ret_dict = dict(
             loss_actor=loss_pi.detach(),
             loss_critic=loss_q.detach(),
@@ -476,18 +471,6 @@ class SACTrainingAgent(TrainingAgent):
             ret_dict["loss_entropy_coef"] = loss_alpha.detach()
             ret_dict["entropy_coef"] = alpha_t.item()
         return ret_dict
-
-
-training_agent_cls = partial(SACTrainingAgent,
-                             model_cls=MyActorCriticModule,
-                             gamma=0.99,
-                             polyak=0.995,
-                             alpha=0.2,
-                             lr_actor=1e-3,
-                             lr_critic=1e-3,
-                             lr_entropy=1e-3,
-                             learn_entropy_coef=True,
-                             target_entropy=None)
 
 
 # Trainer instance:
