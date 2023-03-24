@@ -527,9 +527,6 @@ class VisionTrainingAgent(TrainingAgent):
             optimizer.step()
             losses.append(loss.data.item())
 
-            # if (i + 1) % 1 == 0:
-            #     print('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
-            #         % (epoch + 1, num_epochs, i + 1, len(train_dataset) // batch_size, loss.data[0]))
         mean_loss = np.mean(losses)
         ret_dict['dae_loss']=mean_loss
         torch.save(self.dae.state_dict(), 'dae-test-model.pkl')
@@ -567,14 +564,7 @@ class VisionTrainingAgent(TrainingAgent):
             loss.backward()
             optimizer.step()
             losses.append(loss.data.item())
-            # if (i + 1) % 1 == 0:
-            #     print('Epoch [%d/%d], Iter [%d/%d] Loss: %.4f'
-            #         % (epoch + 1, num_epochs, i + 1, len(train_dataset) // batch_size, loss.data[0]))
         _,_, x_hat = self.bvae(batch[0])
-        #print(np.shape(x_hat.cpu().detach().numpy()))
-        #
-        print(np.shape(batch[0].cpu().detach().numpy()[0]))
-        print(np.shape(x_hat.cpu().detach().numpy()[0][0]))
         cv2.imshow('in',batch[0].cpu().detach().numpy()[0])
         cv2.imshow('bvae out',x_hat.cpu().detach().numpy()[0][0])
         cv2.waitKey(60)
@@ -588,7 +578,6 @@ class VisionTrainingAgent(TrainingAgent):
             x = Variable(image)
             mu_z, log_sigma_z, x_hat = self.bvae(x)
             loss = self.bvae_loss_function(self.dae.encode(x_hat), self.dae.encode(x), mu_z, 2*log_sigma_z, batch_size=batch_size)
-            print(loss)
             cv2.imshow('in',x.cpu().detach().numpy()[0])
             cv2.imshow('bvae out',x_hat.cpu().detach().numpy()[0][0])
             cv2.waitKey(60)
