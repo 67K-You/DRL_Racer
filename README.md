@@ -6,6 +6,13 @@ Git that inspires this project: https://github.com/trackmania-rl/tmrl
 
 This section is inspired by the git: https://github.com/BCHoagland/DARLA?fbclid=IwAR1o6RzmMkMUY4dwjs1KallFpv_9riNHDvJscgbaXCsegjuKHOaE6Q_L6fk
 
+
+## Getting started :
+
+The following packages should be installed
+<code>pip install tmrl==0.3.1</code>
+<code>pip install rtgym==0.7</code>
+
 For the training of DARLA you should follow this procedure : 
 
 1. Step 1 (vision module training) :
