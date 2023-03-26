@@ -1,3 +1,5 @@
+# Credit to the CarRacing implementation from Gym: https://github.com/openai/gym/blob/master/gym/envs/box2d/car_racing.py
+
 """
 Easiest continuous control task to learn from pixels, a top-down racing
 environment.
