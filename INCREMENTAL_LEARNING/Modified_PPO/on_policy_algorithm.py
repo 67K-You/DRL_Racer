@@ -1,3 +1,5 @@
+# Credit to the PPO implementation from StableBaselines3: https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/common/on_policy_algorithm.py
+
 import sys
 import time
 import random

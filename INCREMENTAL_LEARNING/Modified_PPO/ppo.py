@@ -1,3 +1,5 @@
+# Credit to the PPO implementation from StableBaselines3: https://github.com/DLR-RM/stable-baselines3/tree/master/stable_baselines3/ppo
+
 import warnings
 from typing import Any, Dict, Optional, Type, TypeVar, Union
 import torch
