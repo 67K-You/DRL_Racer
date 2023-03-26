@@ -28,18 +28,25 @@ This folder contains four files:
 - play_with_ppo.py: a script that allows the user to launch the game that will be played by a trained model.
 
 This folder contains four sub-folders:
-- envs: the different environments considered for the experiments, all derived from the original *CarRacing-v0*.
+- envs: the different environments considered for the experiments, all derived from the original *CarRacing-v0*;
 **BE CAREFULL, BECAUSE OF SOME BUGS WHEN USING DERIVED CLASS, THE USER HAVE TO MANUALLY CHANGE THE ORIGINAL CARRACING-V0 ENVIRONMENT DIRECTLY IN THE SOURCE OF GYM.**
 **THE CODE THAT HAVE TO BE REPLACED CAN BE FOUND */path_to_site_packages/gym/envs/box2d/car_racing.py.***
 **COPY PAST THE CODE FROM THE envs FOLDER INTO THIS SPECIFIC FILE**
-- logs: the logs of the training process for all the environment tested in this project
-- models: the models that have been saved from the experiments
-- Modified_PPO: the modified files of *StableBaselines3* PPO implementation that implement *Policy Relaxation* and *Importance Weighting*
+- logs: the logs of the training process for all the environment tested in this project;
+- models: the models that have been saved from the experiments;
+- Modified_PPO: the modified files of *StableBaselines3* PPO implementation that implement *Policy Relaxation* and *Importance Weighting*.
 
 # How to use it
 
-To train a new model from scratch, launch *python3 train_ppo.py* considering the variable *from_pre_trained* set to **False**
-To train a new model from a pre-trained model, launch *python3 train_ppo.py* considering the variable *from_pre_trained* set to **True**
+Training models:
+- To train a new model from scratch, launch *python3 train_ppo.py* considering the variable *from_pre_trained* set to **False**.
+- To train a new model from a pre-trained model, launch *python3 train_ppo.py* considering the variable *from_pre_trained* set to **True**.
+
+Playing with PPO:
+- To play with a trained PPO model, launch *python3 play_with_ppo.py* with the variable *model_name* set to the one of the possible models that can be found in the *models/* folder.
+
+Plot the learning process:
+- To plot the leanring process of the models: launch *python3 plot_reward_func.py* considering one of the sub-folder that can be found in the *logs/training/* folder.
 
 # Contact
 
