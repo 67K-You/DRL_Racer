@@ -4,8 +4,7 @@ Git that inspires this project: https://github.com/trackmania-rl/tmrl
 
 # DARLA
 
-This section is inspired by the git: https://github.com/BCHoagland/DARLA?fbclid=IwAR1o6RzmMkMUY4dwjs1KallFpv_9riNHDvJscgbaXCsegjuKHOaE6Q_L6fk
-
+This section is inspired by the git: https://github.com/BCHoagland/DARLA?fbclid=IwAR1o6RzmMkMUY4dwjs1KallFpv_9riNHDvJscgbaXCsegjuKHOaE6Q_L6fk. Please refer to this repository for the installation of tmrl. A step by step tutorial is given and should be followed in order to run the training of the agent using this library.
 
 ## Getting started :
 
