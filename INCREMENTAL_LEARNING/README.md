@@ -29,8 +29,8 @@ This folder contains four files:
 
 This folder contains four sub-folders:
 - envs: the different environments considered for the experiments, all derived from the original *CarRacing-v0*.
-**BE CAREFULL, BECAUSE OF SOME BUGS WHEN USING DERIVED CLASS, THE USER HAVE TO MANUALLY CHANGE THE ORIGINAL CARRACING-V0 ENVIRONMENT DIRECTLY IN THE SOURCE OF GYM**
-**THE CODE THAT HAVE TO BE REPLACED CAN BE FOUND */path_to_site_packages/gym/envs/box2d/car_racing.py***
+**BE CAREFULL, BECAUSE OF SOME BUGS WHEN USING DERIVED CLASS, THE USER HAVE TO MANUALLY CHANGE THE ORIGINAL CARRACING-V0 ENVIRONMENT DIRECTLY IN THE SOURCE OF GYM.**
+**THE CODE THAT HAVE TO BE REPLACED CAN BE FOUND */path_to_site_packages/gym/envs/box2d/car_racing.py.***
 **COPY PAST THE CODE FOR THE envs FOLDER INTO THIS SPECIFIC FILE**
 - logs: the logs of the training process for all the environment tested in this project
 - models: the models that have been saved from the experiments
